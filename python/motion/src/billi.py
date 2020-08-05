@@ -34,7 +34,7 @@ class Billi:
             self.pub = rospy.Publisher("/joint_group_position_controller/command", JointTrajectory, queue_size=10)
             self.billi_rpy_pub = rospy.Publisher("/billi/rpy", PointStamped, queue_size=10)
             rospy.Subscriber("/imu/data",Imu , self.imu_clbk)
-            self.rate = rospy.Rate(30)
+            self.rate = rospy.Rate(10)
             self.current_rpy = [0, 0, 0]
             self.ground_rp = [0, 0]
     
@@ -336,6 +336,13 @@ class Billi:
 
         self.ground_rp[0] = euler[0] - self.current_rpy[0]
         self.ground_rp[1] = euler[1] - self.current_rpy[1]
+
+        print("roll total\n",euler[0])
+        print("pitch total\n",euler[1])
+        
+
+        print("roll ground\n",self.ground_rp[0])
+        print("pitch ground\n",self.ground_rp[1])
 
     def publishAngles(self):
         traj = JointTrajectory()
