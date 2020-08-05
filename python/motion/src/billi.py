@@ -1,4 +1,4 @@
-#! /usr/bin/env python3
+#! /usr/bin/env python
 
 import sys
 
@@ -9,6 +9,9 @@ from rotations import *
 
 import rospy
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
+from geometry_msgs.msg import PointStamped
+from sensor_msgs.msg import Imu
+from tf.transformations import euler_from_quaternion
 
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
@@ -17,6 +20,7 @@ fig = plt.figure()
 ax = fig.add_axes([0, 0, 1, 1], projection='3d')
 
 PI = np.pi
+
 class Billi:
     def __init__(self, length, width, thigh, calf, ros_flag):
         self.length = length
@@ -28,7 +32,11 @@ class Billi:
         if ros_flag:
             rospy.init_node("custom_motion", anonymous=False)
             self.pub = rospy.Publisher("/joint_group_position_controller/command", JointTrajectory, queue_size=10)
+            self.billi_rpy_pub = rospy.Publisher("/billi/rpy", PointStamped, queue_size=10)
+            rospy.Subscriber("/imu/data",Imu , self.imu_clbk)
             self.rate = rospy.Rate(30)
+            self.current_rpy = [0, 0, 0]
+            self.ground_rp = [0, 0]
     
     def kinematics(self, leg, x, y, z, roll, pitch, yaw):
         v_length = np.sqrt(x**2 + y**2 + z**2)
@@ -168,7 +176,7 @@ class Billi:
         ax.set_ylabel('Y axis')
         ax.set_zlabel('Z axis')
 
-        plt.pause(0.01)
+        plt.pause(2)
         return
 
     def test(self):
@@ -245,51 +253,89 @@ class Billi:
             # print(i)
 
     def get_joints(self, x, y, z, r, p, yaw):
+        # rospy.spin()
+        r , p , yaw      = self.update_rpy(r, p, yaw)
         self.leg1_angles = self.kinematics(1, -x, -y, z, r, p, yaw)
         self.leg2_angles = self.kinematics(2, -x, -y, z, r, p, yaw)
         self.leg3_angles = self.kinematics(3, -x, -y, z, r, p, yaw)
         self.leg4_angles = self.kinematics(4, -x, -y, z, r, p, yaw)
-        
-        if self.leg1_angles == -1 or self.leg2_angles == -1 or self.leg3_angles == -1 or self.leg4_angles == -1:
-            print("Aborting Calculation")
-            return -1
-        
-        # print('leg1', self.leg1_angles, '\nleg2', self.leg2_angles, '\nleg3', self.leg3_angles, '\nleg4', self.leg4_angles)
-        # print(((Rz(y) @ Ry(p) @ Rx(r) @ np.mat([-self.length, -(self.width), 215, 1]).T).T)[0])
-        self.body = np.hstack(((T([x,y,z]) @ Rz(-yaw*PI/180) @ Ry(-p*PI/180) @ Rx(-r*PI/180) @ np.mat([ self.length, -self.width, 0, 1]).T),
-                               (T([x,y,z]) @ Rz(-yaw*PI/180) @ Ry(-p*PI/180) @ Rx(-r*PI/180) @ np.mat([ self.length,  self.width, 0, 1]).T),
-                               (T([x,y,z]) @ Rz(-yaw*PI/180) @ Ry(-p*PI/180) @ Rx(-r*PI/180) @ np.mat([-self.length,  self.width, 0, 1]).T),
-                               (T([x,y,z]) @ Rz(-yaw*PI/180) @ Ry(-p*PI/180) @ Rx(-r*PI/180) @ np.mat([-self.length, -self.width, 0, 1]).T),
-                               (T([x,y,z]) @ Rz(-yaw*PI/180) @ Ry(-p*PI/180) @ Rx(-r*PI/180) @ np.mat([ self.length, -self.width, 0, 1]).T),
-                               (T([x,y,z]) @ Rz(-yaw*PI/180) @ Ry(-p*PI/180) @ Rx(-r*PI/180) @ np.mat([ self.length,           0, 0, 1]).T)))
-        thigh = np.mat([0, 0, -self.thigh, 1], dtype=np.float).T
-        calf = np.mat([0, 0, -self.calf, 1], dtype=np.float).T
-
-        self.leg1 = np.mat(np.zeros((4, 3)))
-        self.leg1[:, 0] = self.body[:, 0]
-        self.leg1[:, 1] = T(self.leg1[:, 0]) @ Rx(self.leg1_angles[0]) @ Ry((self.leg1_angles[1] + self.leg1_angles[2])) @ thigh
-        self.leg1[:, 2] = T(self.leg1[:, 0]) @ Rx(self.leg1_angles[0]) @ Ry((self.leg1_angles[1] + self.leg1_angles[2])) @ T(thigh) @ Ry(self.leg1_angles[3]) @ calf
-        # print("%6.3f %6.3f %6.3f" %(ln.norm(self.leg1[0:3, 0] - self.leg1[0:3, 2]), ln.norm(self.leg1[0:3, 0] - self.leg1[0:3, 1]), ln.norm(self.leg1[0:3, 1] - self.leg1[0:3, 2])))
-
-        self.leg2 = np.mat(np.zeros((4, 3)))
-        self.leg2[:, 0] = self.body[:, 1]
-        self.leg2[:, 1] = T(self.leg2[:, 0]) @ Rx(self.leg2_angles[0]) @ Ry((self.leg2_angles[1] + self.leg2_angles[2])) @ thigh
-        self.leg2[:, 2] = T(self.leg2[:, 0]) @ Rx(self.leg2_angles[0]) @ Ry((self.leg2_angles[1] + self.leg2_angles[2])) @ T(thigh) @ Ry(self.leg2_angles[3]) @ calf
-
-        self.leg3 = np.mat(np.zeros((4, 3)))
-        self.leg3[:, 0] = self.body[:, 2]
-        self.leg3[:, 1] = T(self.leg3[:, 0]) @ Rx(self.leg3_angles[0]) @ Ry((self.leg3_angles[1] + self.leg3_angles[2])) @ thigh
-        self.leg3[:, 2] = T(self.leg3[:, 0]) @ Rx(self.leg3_angles[0]) @ Ry((self.leg3_angles[1] + self.leg3_angles[2])) @ T(thigh) @ Ry(self.leg3_angles[3]) @ calf
-
-        self.leg4 = np.mat(np.zeros((4, 3)))
-        self.leg4[:, 0] = self.body[:, 3]
-        self.leg4[:, 1] = T(self.leg4[:, 0]) @ Rx(self.leg4_angles[0]) @ Ry((self.leg4_angles[1] + self.leg4_angles[2])) @ thigh
-        self.leg4[:, 2] = T(self.leg4[:, 0]) @ Rx(self.leg4_angles[0]) @ Ry((self.leg4_angles[1] + self.leg4_angles[2])) @ T(thigh) @ Ry(self.leg4_angles[3]) @ calf
 
         if not self.ros_flag:
-            self.plotBot()
+            pass
+        
+            # if self.leg1_angles == -1 or self.leg2_angles == -1 or self.leg3_angles == -1 or self.leg4_angles == -1:
+            #     print("Aborting Calculation")
+            #     return -1
+            
+            # # print('leg1', self.leg1_angles, '\nleg2', self.leg2_angles, '\nleg3', self.leg3_angles, '\nleg4', self.leg4_angles)
+            # # print(((Rz(y) @ Ry(p) @ Rx(r) @ np.mat([-self.length, -(self.width), 215, 1]).T).T)[0])
+            # self.body = np.hstack(((T([x,y,z]) @ Rz(-yaw*PI/180) @ Ry(-p*PI/180) @ Rx(-r*PI/180) @ np.mat([ self.length, -self.width, 0, 1]).T),
+            #                     (T([x,y,z]) @ Rz(-yaw*PI/180) @ Ry(-p*PI/180) @ Rx(-r*PI/180) @ np.mat([ self.length,  self.width, 0, 1]).T),
+            #                     (T([x,y,z]) @ Rz(-yaw*PI/180) @ Ry(-p*PI/180) @ Rx(-r*PI/180) @ np.mat([-self.length,  self.width, 0, 1]).T),
+            #                     (T([x,y,z]) @ Rz(-yaw*PI/180) @ Ry(-p*PI/180) @ Rx(-r*PI/180) @ np.mat([-self.length, -self.width, 0, 1]).T),
+            #                     (T([x,y,z]) @ Rz(-yaw*PI/180) @ Ry(-p*PI/180) @ Rx(-r*PI/180) @ np.mat([ self.length, -self.width, 0, 1]).T),
+            #                     (T([x,y,z]) @ Rz(-yaw*PI/180) @ Ry(-p*PI/180) @ Rx(-r*PI/180) @ np.mat([ self.length,           0, 0, 1]).T)))
+            # thigh = np.mat([0, 0, -self.thigh, 1], dtype=np.float).T
+            # calf = np.mat([0, 0, -self.calf, 1], dtype=np.float).T
+
+            # self.leg1 = np.mat(np.zeros((4, 3)))
+            # self.leg1[:, 0] = self.body[:, 0]
+            # self.leg1[:, 1] = T(self.leg1[:, 0]) @ Rx(self.leg1_angles[0]) @ Ry((self.leg1_angles[1] + self.leg1_angles[2])) @ thigh
+            # self.leg1[:, 2] = T(self.leg1[:, 0]) @ Rx(self.leg1_angles[0]) @ Ry((self.leg1_angles[1] + self.leg1_angles[2])) @ T(thigh) @ Ry(self.leg1_angles[3]) @ calf
+            # # print("%6.3f %6.3f %6.3f" %(ln.norm(self.leg1[0:3, 0] - self.leg1[0:3, 2]), ln.norm(self.leg1[0:3, 0] - self.leg1[0:3, 1]), ln.norm(self.leg1[0:3, 1] - self.leg1[0:3, 2])))
+
+            # self.leg2 = np.mat(np.zeros((4, 3)))
+            # self.leg2[:, 0] = self.body[:, 1]
+            # self.leg2[:, 1] = T(self.leg2[:, 0]) @ Rx(self.leg2_angles[0]) @ Ry((self.leg2_angles[1] + self.leg2_angles[2])) @ thigh
+            # self.leg2[:, 2] = T(self.leg2[:, 0]) @ Rx(self.leg2_angles[0]) @ Ry((self.leg2_angles[1] + self.leg2_angles[2])) @ T(thigh) @ Ry(self.leg2_angles[3]) @ calf
+
+            # self.leg3 = np.mat(np.zeros((4, 3)))
+            # self.leg3[:, 0] = self.body[:, 2]
+            # self.leg3[:, 1] = T(self.leg3[:, 0]) @ Rx(self.leg3_angles[0]) @ Ry((self.leg3_angles[1] + self.leg3_angles[2])) @ thigh
+            # self.leg3[:, 2] = T(self.leg3[:, 0]) @ Rx(self.leg3_angles[0]) @ Ry((self.leg3_angles[1] + self.leg3_angles[2])) @ T(thigh) @ Ry(self.leg3_angles[3]) @ calf
+
+            # self.leg4 = np.mat(np.zeros((4, 3)))
+            # self.leg4[:, 0] = self.body[:, 3]
+            # self.leg4[:, 1] = T(self.leg4[:, 0]) @ Rx(self.leg4_angles[0]) @ Ry((self.leg4_angles[1] + self.leg4_angles[2])) @ thigh
+            # self.leg4[:, 2] = T(self.leg4[:, 0]) @ Rx(self.leg4_angles[0]) @ Ry((self.leg4_angles[1] + self.leg4_angles[2])) @ T(thigh) @ Ry(self.leg4_angles[3]) @ calf
+
+        
+            # self.plotBot()
         else:
             self.publishAngles()
+
+    def update_rpy(self, r, p ,yaw):
+        
+        self.current_rpy = [r, p, yaw]
+        
+        r = r - self.ground_rp[0]
+        p = p - self.ground_rp[1]
+
+        ori = PointStamped()
+
+        ori.header.frame_id = "/"
+        ori.point.x = r
+        ori.point.y = p
+        ori.point.z = yaw
+
+        self.billi_rpy_pub.publish(ori)
+        # self.rate.sleep()
+
+        return r , p , yaw
+
+    def imu_clbk(self, data):
+
+        x = data.orientation.x
+        y = data.orientation.y
+        z = data.orientation.z
+        w = data.orientation.w
+
+        quaternion = (x, y, z, w)
+
+        euler = euler_from_quaternion(quaternion)
+
+        self.ground_rp[0] = euler[0] - self.current_rpy[0]
+        self.ground_rp[1] = euler[1] - self.current_rpy[1]
 
     def publishAngles(self):
         traj = JointTrajectory()
